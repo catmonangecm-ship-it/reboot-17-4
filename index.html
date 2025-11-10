@@ -347,6 +347,30 @@
             fetchCryptoList();
             fetchBNBPrice();
             setInterval(fetchBNBPrice, 30000);
+            
+            // Écouter les changements MetaMask
+            if (window.ethereum) {
+                window.ethereum.on('accountsChanged', (accounts) => {
+                    console.log('🔄 Compte changé');
+                    if (accounts.length === 0) {
+                        // Déconnecté
+                        state.isConnected = false;
+                        state.account = null;
+                        state.provider = null;
+                        state.signer = null;
+                        updateUI();
+                        alert('⚠️ Wallet déconnecté');
+                    } else {
+                        // Nouveau compte
+                        window.location.reload();
+                    }
+                });
+                
+                window.ethereum.on('chainChanged', (chainId) => {
+                    console.log('🔄 Chaîne changée:', chainId);
+                    window.location.reload();
+                });
+            }
         });
 
         async function fetchBNBPrice() {
@@ -370,15 +394,41 @@
 
             try {
                 console.log('🔌 Connexion à MetaMask...');
+                
+                // Demander les comptes
                 const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+                
+                if (!accounts || accounts.length === 0) {
+                    throw new Error('Aucun compte trouvé');
+                }
+                
+                // Vérifier la chaîne
                 const chainId = await window.ethereum.request({ method: 'eth_chainId' });
                 
                 if (chainId !== '0x38') {
                     console.log('⚠️ Changement vers BSC...');
-                    await window.ethereum.request({
-                        method: 'wallet_switchEthereumChain',
-                        params: [{ chainId: '0x38' }]
-                    });
+                    try {
+                        await window.ethereum.request({
+                            method: 'wallet_switchEthereumChain',
+                            params: [{ chainId: '0x38' }]
+                        });
+                    } catch (switchError) {
+                        // Si la chaîne n'existe pas, l'ajouter
+                        if (switchError.code === 4902) {
+                            await window.ethereum.request({
+                                method: 'wallet_addEthereumChain',
+                                params: [{
+                                    chainId: '0x38',
+                                    chainName: 'BNB Smart Chain',
+                                    nativeCurrency: { name: 'BNB', symbol: 'BNB', decimals: 18 },
+                                    rpcUrls: ['https://bsc-dataseed1.binance.org'],
+                                    blockExplorerUrls: ['https://bscscan.com']
+                                }]
+                            });
+                        } else {
+                            throw switchError;
+                        }
+                    }
                 }
                 
                 state.account = accounts[0];
@@ -386,19 +436,33 @@
                 state.signer = state.provider.getSigner();
                 state.isConnected = true;
                 
+                console.log('✅ Wallet connecté:', state.account);
+                
                 // Charger les vrais soldes
                 await loadBalances();
                 
                 // Vérifier l'approbation USDT
                 await checkUSDTApproval();
                 
-                console.log('✅ Wallet connecté:', state.account);
-                
                 updateUI();
-                fetchCryptoList();
+                
+                if (state.cryptoList.length === 0) {
+                    fetchCryptoList();
+                }
             } catch (error) {
                 console.error('❌ Erreur connexion:', error);
-                alert('Erreur lors de la connexion: ' + error.message);
+                
+                let errorMsg = 'Erreur lors de la connexion à MetaMask';
+                
+                if (error.code === 4001) {
+                    errorMsg = 'Connexion refusée. Veuillez accepter la demande dans MetaMask.';
+                } else if (error.code === -32002) {
+                    errorMsg = 'Une demande de connexion est déjà en attente. Vérifiez MetaMask.';
+                } else if (error.message) {
+                    errorMsg = 'Erreur: ' + error.message;
+                }
+                
+                alert(errorMsg);
             }
         }
 
